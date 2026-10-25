@@ -1,0 +1,9 @@
+{
+  "capturedAt":"2026-10-17",
+  "notice":"以下为官方技术文档摘要；本次不连接这些 API，不声称已经集成。",
+  "sources":[
+    {"id":"S4","url":"https://linear.app/developers/rate-limiting","title":"Linear rate limiting","facts":["请求量和查询复杂度有分别的限制。","官方建议针对数据变更使用 webhook，而非持续轮询；读取时应仅取需要的字段。","限流响应应检查 GraphQL errors 中的 RATELIMITED，不宜仅依赖 HTTP 429。"]},
+    {"id":"S5","url":"https://linear.app/developers/webhooks","title":"Linear webhooks","facts":["webhook 可在数据创建、更新、移除时推送事件。","官方文档要求校验 webhook 来源；配置按组织及团队范围处理。","接入外部系统还需要明确授权、重试、去重和撤销后的行为，不能假设永不失败。"]}
+  ],
+  "projectConstraints":["测试产品面向3—10人的小型产品团队；这是设计假设，不是市场调研结论。","首版需在无外部账号登录的情况下录入、分类、排序和导出反馈。","优先本地保存，可手工导入和导出；外部同步是否纳入首版需明确取舍。","不得上传真实客户数据；附件、个人信息的保留范围和删除行为必须明确。","待验证指标不能写成已经发生的收入或转化提升。"]
+}

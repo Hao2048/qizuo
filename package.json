@@ -1,0 +1,27 @@
+{
+	"name": "pi-harness",
+	"private": true,
+	"version": "0.1.0",
+	"description": "栖作 Qizuo - 以角色与角色记忆为核心的个人 AI 工作台",
+	"packageManager": "pnpm@10.15.1",
+	"engines": {
+		"node": ">=22.19.0"
+	},
+	"scripts": {
+		"typecheck": "pnpm -r --if-present typecheck",
+		"test": "pnpm -r --if-present test",
+		"build:desktop": "pnpm --filter @pi-harness/desktop build",
+		"dev": "pnpm --filter @pi-harness/desktop dev",
+		"smoke": "pnpm --filter @pi-harness/desktop smoke",
+		"verify": "pnpm typecheck && pnpm test && pnpm build:desktop && pnpm smoke",
+		"test:stability": "pnpm --filter @pi-harness/runtime exec vitest run src/stability/faults.test.ts",
+		"acceptance:stability": "node packages/runtime/scripts/acceptance/stability.mjs"
+	},
+	"pnpm": {
+		"onlyBuiltDependencies": [
+			"better-sqlite3",
+			"electron",
+			"esbuild"
+		]
+	}
+}

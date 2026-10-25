@@ -1,0 +1,87 @@
+{
+	"name": "@pi-harness/desktop",
+	"version": "0.1.0",
+	"type": "module",
+	"private": true,
+	"description": "栖作 Qizuo · 以角色与记忆为核心的个人工作台",
+	"main": "./out/main/index.js",
+	"scripts": {
+		"dev": "electron-vite dev",
+		"build": "electron-vite build",
+		"typecheck": "tsc -p tsconfig.node.json --noEmit && tsc -p tsconfig.web.json --noEmit",
+		"test": "vitest run",
+		"smoke": "node scripts/smoke.mjs",
+		"rebuild:electron": "electron-rebuild -f -w better-sqlite3",
+		"rebuild:node": "pnpm -r rebuild better-sqlite3",
+		"dist": "node scripts/package.mjs",
+		"dist:dir": "node scripts/package.mjs --dir",
+		"test:release": "node --test scripts/release-files.test.mjs"
+	},
+	"dependencies": {
+		"@earendil-works/pi-ai": "1.0.3",
+		"@earendil-works/pi-coding-agent": "1.0.3",
+		"@pi-harness/contracts": "workspace:*",
+		"@pi-harness/runtime": "workspace:*",
+		"@pi-harness/shared": "workspace:*",
+		"better-sqlite3": "^13.0.3"
+	},
+	"devDependencies": {
+		"@electron/rebuild": "^4.2.0",
+		"@testing-library/react": "^16.3.0",
+		"@types/node": "^24.0.0",
+		"@types/react": "^19.3.0",
+		"@types/react-dom": "^19.3.0",
+		"@vitejs/plugin-react": "^5.2.0",
+		"electron": "^44.5.1",
+		"electron-builder": "^26.15.3",
+		"electron-vite": "^5.0.0",
+		"jsdom": "^27.0.0",
+		"react": "^19.3.0",
+		"react-dom": "^19.3.0",
+		"typescript": "^5.9.0",
+		"vite": "^7.1.0",
+		"vitest": "^5.0.0",
+		"zustand": "^5.0.15"
+	},
+	"build": {
+		"appId": "dev.piharness.app",
+		"productName": "栖作",
+		"directories": {
+			"output": "release"
+		},
+		"files": [
+			"out/**",
+			"node_modules/**",
+			"package.json",
+			"!node_modules/**/{CHANGELOG.md,README.md,readme.md,.md}",
+			"!node_modules/**/{test,__tests__,tests,example,examples,docs}/**",
+			"!node_modules/**/*.map",
+			"!node_modules/**/*.d.ts",
+			"!node_modules/**/*.d.mts",
+			"!node_modules/**/*.d.cts",
+			"!node_modules/@pi-harness/**",
+			"!node_modules/better-sqlite3/{src,deps}/**",
+			"!node_modules/better-sqlite3/{binding.gyp,Makefile}",
+			"!node_modules/better-sqlite3/prebuilds/{linux*,win32*}.node"
+		],
+		"asarUnpack": [
+			"**/*.node",
+			"node_modules/better-sqlite3/**",
+			"node_modules/@earendil-works/**"
+		],
+		"mac": {
+			"target": [
+				{
+					"target": "default",
+					"arch": [
+						"arm64"
+					]
+				}
+			],
+			"category": "public.app-category.developer-tools",
+			"icon": "build/icon.icns",
+			"identity": null
+		},
+		"npmRebuild": true
+	}
+}

@@ -1,0 +1,9 @@
+{
+  "capturedAt": "2026-10-17",
+  "notice": "测试者查阅官方文档后整理的简短事实摘记，并非完整网页。仅代表页面描述的能力，不证明采用率、价格、用户满意度或商业机会。角色应独立提取适用事实并标记未知，不补造定价。",
+  "sources": [
+    {"id":"S1","product":"Linear","url":"https://linear.app/docs/customer-requests","title":"Customer Requests","facts":["客户请求可关联到 issue 或 project，并保留反馈来源。","客户页面可汇总关联请求；文档介绍按客户属性筛选工作的方式。","官方支持手工添加反馈，也提供部分外部系统集成；具体计划资格须另查，不在本测试推断价格。"]},
+    {"id":"S2","product":"Canny","url":"https://feedback.canny.io/","title":"Canny public feedback and roadmap","facts":["官方公开反馈站包含不同反馈看板。","公开路线图按状态展示条目，例如 Under Review、Planned、In Progress。","此页面不提供代表全部客户需求的统计样本，也不证明某功能有付费意愿。"]},
+    {"id":"S3","product":"Canny","url":"https://help.canny.io/en/articles/4195400-the-canny-api","title":"The Canny API","facts":["官方提供程序化访问反馈相关数据的 API。","文档描述可程序化更新帖子的状态。","对特定账户的 Autopilot 数据处理能力有条件，不应概括为所有用户均可使用。"]}
+  ]
+}

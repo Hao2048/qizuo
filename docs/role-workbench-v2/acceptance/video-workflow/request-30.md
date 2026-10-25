@@ -1,0 +1,9 @@
+请实际分工制作虚构番茄钟产品“慢半拍”的30秒竖屏介绍视频。受众为容易分心的独立工作者，表达从一个小专注时段开始，克制可信，不宣传疗效、不虚构用户数字。形态为原创图形动效+清晰中文字幕的无声MP4，不需要配音/实拍/付费素材，后续由我独立执行渲染并验收。视频720x1280、24fps、总长30秒，3镜头分别[0,10)、[10,20)、[20,30]秒。主视觉深蓝与奶白，几何图形、文本出现/消失动效，结尾CTA“从一个25分钟开始”。每镜标题不超过12个中文字符、说明不超过18个，中文需完整显示。最终输出delivery/final.mp4。
+已加入视频策划、视频编剧、分镜设计师、视频剪辑师、网站开发工程师。请只唤醒视频所需的四位，网站开发工程师完全不参与，不增加新角色。按先策划、再编剧、再分镜、最后剪辑的依赖顺序实际执行，不只输出计划。凡读取brief都显式依赖策划；剪辑需读策划、脚本、分镜三方成果，因此安排三位上游依赖。不要让下游在上游尚未生成时虚构文件。
+职责及共享文件格式：
+1. 视频策划只写brief/brief.json，包含{brand,audience,promise,cta,duration:30}与brief/README.md验收目标。
+2. 视频编剧只写script/script.json，包含{duration:30,scenes:[{id:'s1',start:0,end:10,headline,caption},{id:'s2',start:10,end:20,headline,caption},{id:'s3',start:20,end:30,headline,caption}]}，s3标题或说明必须出现CTA。读取策划，说明来源。
+3. 分镜设计师只写storyboard/storyboard.json，包含{duration:30,width:720,height:1280,fps:24,scenes:[{id,start,end,headline,caption,background,accent,visual,motion}]}；id/时间/文字逐字沿用script的3镜头，background/accent用#RRGGBB颜色，设计可见动画。不得重写上游文案。
+4. 视频剪辑师只写editor/render.mjs和delivery/中的交付说明/清单。渲染器用Node内置模块+项目自带tools/ffmpeg，读取上述三个JSON，不在代码内硬编码文案或颜色，自动生成delivery/final.mp4及delivery/manifest.json（至少含duration,width,height,fps,scenes与上游各JSON的SHA256）。读取失败、数据/契约不一致、ffmpeg失败必须非零退出，不能输出成功；脚本可重复运行。不安装依赖，不下载素材。工具为可执行43MB独立ffmpeg；中文字体可用/System/Library/Fonts/STHeiti Medium.ttc。drawtext用textfile读取UTF-8文案，避免文本转义问题；maximal画面宽度与字幕安全边距。用libx264/yuv420p、无音轨即可。角色只用文件工具编写，我将独立通过node editor/render.mjs启动渲染；不要自称已成片或已验收。
+请先为四位共同建立稳定id为video-delivery的对接约定，限定上述文件格式、镜头时间与输出规格；以后直接沿用，不重复概括创建冲突。当前所有角色没有命令、网络和插件授权，不要改变权限。tools/以及外部验证程序不属于任何角色修改范围。
+本任务是从空项目开始的30秒验收。共同约定video-delivery仅存软件的共同约定模块，不在项目创建contracts/目录或任何契约镜像文件，策划只能写brief/。上游只需小而完整的JSON及简短README，不写冗长过程说明。按职责及依赖直接执行，不要再次询问是否开始。

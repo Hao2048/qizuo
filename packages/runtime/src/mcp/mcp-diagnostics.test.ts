@@ -1,0 +1,52 @@
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { McpService } from "./mcp-service.js";
+import { McpDiagnostics } from "./mcp-diagnostics.js";
+let dir:string,mcp:McpService,diagnostics:McpDiagnostics;
+beforeEach(()=>{dir=mkdtempSync(join(tmpdir(),"pih-diagnostics-"));mcp=new McpService(dir);mcp.add({name:"fixture",url:"https://fixture.example/mcp"});});
+afterEach(()=>{diagnostics?.dispose();rmSync(dir,{recursive:true,force:true});vi.useRealTimers();});
+it("snapshots never connect; checks coalesce and retain tool count and timestamp",async()=>{
+ let finish!:(result:any)=>void;
+ const probe=vi.fn(()=>new Promise<any>(resolve=>{finish=resolve;}));
+ diagnostics=new McpDiagnostics(mcp,dir,probe);
+ expect(diagnostics.list()[0]?.state).toBe("unchecked");expect(probe).not.toHaveBeenCalled();
+ const first=diagnostics.check("fixture"),second=diagnostics.check("fixture");
+ expect(first).toBe(second);expect(diagnostics.list()[0]?.state).toBe("checking");
+ await Promise.resolve();finish({state:"ready",message:"连接成功",toolCount:4});
+ await first;expect(probe).toHaveBeenCalledTimes(1);
+ expect(diagnostics.list()[0]).toMatchObject({state:"ready",toolCount:4,checkedAt:expect.any(Number)});
+});
+it("invalidates stored diagnostics after configuration or credential changes and removes deleted servers",async()=>{
+ diagnostics=new McpDiagnostics(mcp,dir,vi.fn().mockResolvedValue({state:"ready",message:"ok",toolCount:1}));
+ await diagnostics.check("fixture");
+ writeFileSync(join(dir,"mcp-auth.json"),JSON.stringify({fixture:"updated-fixture"}));
+ expect(diagnostics.list()[0]?.state).toBe("unchecked");
+ mcp.setEnabled("fixture",false);expect(diagnostics.list()[0]?.state).toBe("disabled");
+ expect((await diagnostics.check("fixture")).state).toBe("disabled");
+ mcp.remove("fixture");expect(diagnostics.list()).toEqual([]);
+ await expect(diagnostics.check("fixture")).rejects.toThrow("不存在");
+});
+it("discards late results after edits and enforces bounded timeout and shutdown",async()=>{
+ vi.useFakeTimers();
+ let finish!:(result:any)=>void;
+ const probe=vi.fn((_name,_dir,_token,signal?:AbortSignal)=>new Promise<any>(resolve=>{finish=resolve;}));
+ diagnostics=new McpDiagnostics(mcp,dir,probe);
+ const old=diagnostics.check("fixture");await Promise.resolve();
+ mcp.upsert({name:"fixture",url:"https://changed.example/mcp"});
+ finish({state:"ready",message:"old",toolCount:1});expect((await old).state).toBe("unchecked");
+ expect(diagnostics.list()[0]?.state).toBe("unchecked");
+ const timed=diagnostics.check("fixture");await vi.advanceTimersByTimeAsync(15_000);
+ expect((await timed).state).toBe("unavailable");expect(probe.mock.calls[1]?.[3]?.aborted).toBe(true);
+ const exiting=diagnostics.check("fixture");await Promise.resolve();await diagnostics.shutdown();await exiting;
+ expect(probe.mock.calls[2]?.[3]?.aborted).toBe(true);expect(vi.getTimerCount()).toBe(0);
+ await expect(diagnostics.check("fixture")).rejects.toThrow("已关闭");
+});
+it("handles missing credentials and never forwards raw probe errors",async()=>{
+ mcp.upsert({name:"fixture",url:"https://fixture.example/mcp",headers:{Authorization:"Bearer ${PIH_DIAGNOSTIC_TEST_MISSING}"}});
+ diagnostics=new McpDiagnostics(mcp,dir,vi.fn().mockRejectedValue(new Error("Bearer secret-fixture-token")));
+ expect(diagnostics.list()[0]?.state).toBe("required");
+ const result=await diagnostics.check("fixture");expect(result.state).toBe("unavailable");
+ expect(JSON.stringify(result)).not.toContain("secret-fixture-token");
+});

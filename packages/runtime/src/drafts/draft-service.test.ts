@@ -1,0 +1,102 @@
+import { ensureFauxRegistered, fauxModelRef } from "../pi/faux-provider.js";
+import { fauxAssistantMessage } from "@earendil-works/pi-ai";
+import { beforeEach, afterEach, it, expect } from 'vitest';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { createHarnessCore, type HarnessCore } from '../core/harness-core.js';
+let core:HarnessCore, dir:string;
+const chat={kind:'chat' as const,id:null};
+async function call(name:string,input:unknown={}) {const r=await core.router.invoke(name,input);if(!r.ok)throw Error(r.error.message);return r.result as any;}
+beforeEach(async()=>{dir=mkdtempSync(join(tmpdir(),'pih-drafts-'));core=await createHarnessCore({dataDir:dir,enableFaux:true});});
+afterEach(async()=>{await core.shutdown();rmSync(dir,{recursive:true,force:true});});
+it('普通会话文字与附件内容跨重启恢复，不需要原文件也不启动模型',async()=>{
+ const task=await call('task:create',{});const target={kind:'chat',id:task.id};
+ const attachments=[{kind:'text',name:'需求.md',data:'只属于角色甲的草稿'}, {kind:'image',name:'ref.png',mimeType:'image/png',data:'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/qGkAAAAASUVORK5CYII='}];
+ await call('draft:save',{...target,revision:0,patch:{text:'未发送的需求',attachments}});
+ const before=await call('draft:get',target);
+ const fileBody=core.db.prepare('SELECT body FROM composer_draft_files WHERE draft_key=? ORDER BY ordinal').all('chat:'+task.id);
+ await call('draft:save',{...target,revision:before.revision,patch:{text:'继续输入'}});
+ expect(core.db.prepare('SELECT body FROM composer_draft_files WHERE draft_key=? ORDER BY ordinal').all('chat:'+task.id)).toEqual(fileBody);
+ await core.shutdown();core=await createHarnessCore({dataDir:dir,enableFaux:true});
+ expect((await call('draft:get',target)).draft).toMatchObject({text:'继续输入',attachments});
+ expect((await call('task:get',{taskId:task.id})).transcript).toEqual([]);
+ expect(core.db.prepare('SELECT count(*) n FROM usage_ledger').get()).toEqual({n:0});
+});
+it('工作台仅保留明确引用的未发附件；移除不删除历史文件，删除工作台级联清理',async()=>{
+ const w=await call('workbench:create',{title:'甲'}),other=await call('workbench:create',{title:'乙'});
+ const add=async(id:string,name:string)=>call('workbench:attach',{id,name,kind:'text',mimeType:'text/plain',data:Buffer.from(name).toString('base64')});
+ const unsent=await add(w.id,'draft.md'),history=await add(w.id,'history.md'),orphan=await add(w.id,'orphan.md');
+ core.workbench.attachments.bind(w.id,'sent',[history.id]);
+ await call('draft:save',{kind:'workbench',id:w.id,revision:0,patch:{text:'继续修改',attachmentIds:[unsent.id,history.id],recipient:'role-that-may-be-paused',evidence:'待核对',verificationCommands:'node test.mjs'}});
+ await expect(call('draft:save',{kind:'workbench',id:other.id,revision:0,patch:{attachmentIds:[unsent.id]}})).rejects.toThrow('不属于');
+ await core.shutdown();core=await createHarnessCore({dataDir:dir,enableFaux:true});
+ expect(core.workbench.attachments.read(w.id,unsent.id).data).toBe(Buffer.from('draft.md').toString('base64'));
+ expect(()=>core.workbench.attachments.read(w.id,orphan.id)).toThrow();
+ const saved=await call('draft:get',{kind:'workbench',id:w.id});
+ expect(saved.draft).toMatchObject({text:'继续修改',attachmentIds:[unsent.id,history.id]});
+ await call('draft:save',{kind:'workbench',id:w.id,revision:saved.revision,patch:{attachmentIds:[]}});
+ expect(()=>core.workbench.attachments.read(w.id,unsent.id)).toThrow();
+ expect(core.workbench.attachments.read(w.id,history.id)).toBeTruthy();
+ await call('workbench:delete',{id:w.id});
+ await expect(call('draft:get',{kind:'workbench',id:w.id})).rejects.toThrow('不存在');
+ expect(core.db.prepare('SELECT count(*) n FROM composer_drafts WHERE workbench_id=?').get(w.id)).toEqual({n:0});
+});
+it('版本校验不覆盖较新草稿，发送确认只清除捕获版本，新建会话移动草稿不串任务',async()=>{
+ await call('draft:save',{...chat,revision:0,patch:{text:'第一版',attachments:[{kind:'text',name:'notes.md',data:'正文'}]}});
+ const task=await call('task:create',{});
+ await expect(call('draft:moveChat',{taskId:task.id,revision:0})).rejects.toThrow('变化');
+ const moved=await call('draft:moveChat',{taskId:task.id,revision:1});
+ expect(moved.draft.text).toBe('第一版');expect((await call('draft:get',chat)).draft.attachments).toEqual([]);
+ const target={kind:'chat' as const,id:task.id};
+ await call('draft:save',{...target,revision:moved.revision,patch:{text:'新编辑'}});
+ core.drafts.acknowledge(target,moved.revision);
+ expect((await call('draft:get',target)).draft.text).toBe('新编辑');
+ await expect(call('draft:save',{...target,revision:moved.revision,patch:{text:'旧请求'}})).rejects.toThrow('已更新');
+ core.drafts.acknowledge(target,moved.revision+1);
+ expect((await call('draft:get',target)).draft.attachments).toEqual([]);
+ expect(core.db.prepare('SELECT count(*) n FROM composer_draft_files').get()).toEqual({n:0});
+ await call('task:delete',{taskId:task.id});
+ await expect(call('draft:save',{...target,revision:0,patch:{text:'晚到请求'}})).rejects.toThrow('不存在');
+});
+it('保存草稿不接收权限参数、不读取任意文件路径，也不允许工作会话冒充普通会话',async()=>{
+ const task=await call('task:create',{}),w=await call('workbench:create',{title:'任务'});
+ core.db.prepare('UPDATE tasks SET workbench_owner=? WHERE id=?').run(w.id,task.id);
+ await expect(call('draft:save',{kind:'chat',id:task.id,revision:0,patch:{text:'串角色'}})).rejects.toThrow('普通会话');
+ await expect(call('draft:save',{...chat,revision:0,patch:{attachments:[{kind:'text',name:'../secret',data:'x'}]}})).rejects.toThrow('名称');
+ const initial=await call('settings:get');await call('draft:save',{...chat,revision:0,patch:{text:'只保存，不执行'}});
+ expect(await call('settings:get')).toEqual(initial);expect(core.db.prepare('SELECT count(*) n FROM usage_ledger').get()).toEqual({n:0});
+});
+it('引用快照被草稿保留跨日，移入普通会话后仍可发送；删除任务清理文件副本',async()=>{
+ const task=await call('task:create',{});
+ const ref={id:'saved-ref',sourceTaskId:task.id,title:'用户选定的引用',capturedAt:1,text:'摘要',omittedMessages:0,truncated:false};
+ core.db.prepare('INSERT INTO conversation_references(id,payload,created_at) VALUES(?,?,1)').run(ref.id,JSON.stringify(ref));
+ await call('draft:save',{...chat,revision:0,patch:{text:'继续处理引用',referenceIds:[ref.id]}});
+ await core.shutdown();core=await createHarnessCore({dataDir:dir,enableFaux:true});
+ expect((await call('draft:references',chat)).references).toEqual([ref]);
+ const moved=await call('draft:moveChat',{taskId:task.id,revision:1});
+ expect(moved.draft.referenceIds).toEqual([ref.id]);
+ await call('settings:set',{defaultModel:fauxModelRef(),permissionMode:'bypass',autoApproveTools:[]});
+ ensureFauxRegistered().setResponses([fauxAssistantMessage('已收到用户确认的引用')]);
+ await call('task:prompt',{taskId:task.id,text:'阅读引用',referenceIds:[ref.id],draftRevision:moved.revision});
+ expect((await call('draft:get',{kind:'chat',id:task.id})).draft.text).toBe('');
+ const next=await call('draft:get',{kind:'chat',id:task.id});
+ await call('draft:save',{kind:'chat',id:task.id,revision:next.revision,patch:{attachments:[{kind:'text',name:'private.md',data:'私有文本'}]}});
+ for(let i=0;i<200&&(await call('task:get',{taskId:task.id})).task.status!=='done';i++)await new Promise(r=>setTimeout(r,10));
+ await call('task:delete',{taskId:task.id});
+ expect(core.db.prepare('SELECT count(*) n FROM composer_draft_files').get()).toEqual({n:0});
+ expect((await call('draft:get',chat)).draft.text).toBe('');
+});
+it('取消附件后即使草稿元数据尚未来得及更新，重启仍可恢复文字而不复活附件',async()=>{
+ const w=await call('workbench:create',{title:'取消后重启'});
+ const file=await call('workbench:attach',{id:w.id,name:'cancel.md',kind:'text',mimeType:'text/plain',data:Buffer.from('内容').toString('base64')});
+ await call('draft:save',{kind:'workbench',id:w.id,revision:0,patch:{text:'保留文字',attachmentIds:[file.id]}});
+ await call('workbench:discardAttachment',{id:w.id,attachmentId:file.id});
+ await core.shutdown();core=await createHarnessCore({dataDir:dir,enableFaux:true});
+ expect((await call('draft:get',{kind:'workbench',id:w.id})).draft).toMatchObject({text:'保留文字',attachmentIds:[]});
+});
+
+it('拒绝把权限设置、角色提示词等额外字段混入草稿',async()=>{
+ await expect(call('draft:save',{...chat,revision:0,patch:{text:'内容',permissionMode:'bypass',network:true,systemPrompt:'inject'}})).rejects.toThrow('校验失败');
+ expect((await call('draft:get',chat)).revision).toBe(0);
+});

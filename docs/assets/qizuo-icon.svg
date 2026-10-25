@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" fill="none">
+  <title>栖作 · Qizuo</title>
+  <defs>
+    <linearGradient id="tile" x1="180" y1="100" x2="860" y2="940" gradientUnits="userSpaceOnUse"><stop stop-color="#315D62"/><stop offset=".55" stop-color="#193C43"/><stop offset="1" stop-color="#10292F"/></linearGradient>
+    <linearGradient id="porcelain" x1="370" y1="320" x2="704" y2="712" gradientUnits="userSpaceOnUse"><stop stop-color="#FFFFFF"/><stop offset="1" stop-color="#D8EBE7"/></linearGradient>
+    <linearGradient id="edge" x1="240" y1="84" x2="780" y2="940" gradientUnits="userSpaceOnUse"><stop stop-color="#FFFFFF" stop-opacity=".32"/><stop offset=".55" stop-color="#FFFFFF" stop-opacity=".03"/><stop offset="1" stop-color="#FFFFFF" stop-opacity=".12"/></linearGradient>
+    <filter id="shadow" x="0" y="0" width="1024" height="1024" filterUnits="userSpaceOnUse"><feDropShadow dx="0" dy="16" stdDeviation="15" flood-color="#10292F" flood-opacity=".18"/></filter>
+  </defs>
+  <rect x="84" y="84" width="856" height="856" rx="190" fill="url(#tile)" filter="url(#shadow)"/>
+  <rect x="86" y="86" width="852" height="852" rx="188" stroke="url(#edge)" stroke-width="4"/>
+  <path d="M616 334H472C387 334 334 387 334 472V552C334 637 387 690 472 690H552C637 690 690 637 690 552V470" stroke="url(#porcelain)" stroke-width="66" stroke-linecap="round"/>
+  <path d="M550 550L708 708" stroke="url(#porcelain)" stroke-width="66" stroke-linecap="round"/>
+  <path d="M681 332L706 357" stroke="#9ED9CC" stroke-width="52" stroke-linecap="round"/>
+</svg>

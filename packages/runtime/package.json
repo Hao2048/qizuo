@@ -1,0 +1,29 @@
+{
+	"name": "@pi-harness/runtime",
+	"version": "0.1.0",
+	"type": "module",
+	"exports": {
+		".": "./src/index.ts"
+	},
+	"scripts": {
+		"typecheck": "tsc -p tsconfig.json --noEmit",
+		"test": "vitest run",
+		"eval:routing": "node scripts/evaluate-routing.mjs",
+		"eval:routing:live": "node scripts/capture-routing.mjs",
+		"test:routing-eval": "node --test scripts/routing-checks.mjs"
+	},
+	"dependencies": {
+		"@earendil-works/pi-ai": "1.0.3",
+		"@earendil-works/pi-coding-agent": "1.0.3",
+		"@pi-harness/contracts": "workspace:*",
+		"@pi-harness/shared": "workspace:*",
+		"better-sqlite3": "^13.0.3",
+		"typebox": "^1.3.27"
+	},
+	"devDependencies": {
+		"@types/better-sqlite3": "^7.6.13",
+		"@types/node": "^24.0.0",
+		"typescript": "^5.9.0",
+		"vitest": "^5.0.0"
+	}
+}

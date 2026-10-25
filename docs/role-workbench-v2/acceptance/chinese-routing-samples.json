@@ -1,0 +1,14 @@
+[
+ {"id":"review-history","text":"之前做了什么？把做完和没做完的列给我，不要重跑命令。","actions":["clarify"],"roles":[]},
+ {"id":"discuss-only","text":"先讨论一下官网应该有哪些栏目，暂时别改文件。","actions":["clarify"],"roles":[]},
+ {"id":"frontend-label","text":"只把手机号输入框的提示改为请输入手机号，后台接口不变。","actions":["dispatch"],"roles":["front"]},
+ {"id":"backend-validation","text":"后端保存接口增加手机号长度校验，前端保持现状。","actions":["dispatch"],"roles":["back"]},
+ {"id":"full-phone","text":"联系表单新增手机号，提交后保存到后台，再检查整条链路。","actions":["dispatch"],"roles":["front","back"]},
+ {"id":"paused-backend","text":"联系表单手机号需要保存到后台，但后端角色已暂停；不要替我恢复它。","paused":["back"],"actions":["clarify"],"roles":[]},
+ {"id":"ambiguous","text":"这个地方还是不对，你再改好一点。","actions":["clarify"],"roles":[]},
+ {"id":"new-role","text":"把接口测试交给测试工程师，但项目还没有加入测试角色，先推荐让我确认。","actions":["recommend","clarify"],"roles":["qa"],"allowEmpty":true},
+ {"id":"interface-options","text":"先比较手机号字段叫phone还是mobile的迁移成本，先别修改约定和代码。","actions":["clarify"],"roles":[]},
+ {"id":"named-front","text":"请前端工程师处理按钮间距，其他角色保持待命。","actions":["dispatch"],"roles":["front"]},
+ {"id":"failed-step","text":"测试报告说后端漏存手机号，只修复后端保存逻辑，不重做前端。","actions":["dispatch"],"roles":["back"]},
+ {"id":"no-wake-qa","text":"只调整页面背景颜色，测试角色继续暂停。","paused":["qa"],"actions":["dispatch"],"roles":["front"]}
+]

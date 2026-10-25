@@ -1,0 +1,62 @@
+import {beforeEach,afterEach,it,expect} from 'vitest';
+import {mkdtempSync,rmSync} from 'node:fs';
+import {join} from 'node:path';
+import {tmpdir} from 'node:os';
+import {fauxAssistantMessage} from '@earendil-works/pi-ai';
+import {createHarnessCore,type HarnessCore} from '../core/harness-core.js';
+import {ensureFauxRegistered,fauxModelRef} from '../pi/faux-provider.js';
+let core:HarnessCore,dir:string;
+async function invoke(name:string,input:unknown):Promise<any>{const r=await core.router.invoke(name,input);if(!r.ok)throw Error(r.error.message);return r.result;}
+async function done(id:string){for(let i=0;i<300;i++){const r=(await invoke("task:get",{taskId:id})).task;if(['done','error'].includes(r.status))return r;await new Promise(r=>setTimeout(r,10));}throw Error('timeout');}
+beforeEach(async()=>{dir=mkdtempSync(join(tmpdir(),'pih-memory-reuse-'));core=await createHarnessCore({dataDir:dir,enableFaux:true});await invoke('settings:set',{defaultModel:fauxModelRef(),permissionMode:'bypass',autoApproveTools:[]});});
+afterEach(async()=>{await core.shutdown();rmSync(dir,{recursive:true,force:true});});
+it('真实SDK请求按角色记录引用；修订及忘记下一轮生效，重启查看不重放，删除清理引用但保留记忆',async()=>{
+ const role=await invoke('role:create',{name:'前端',systemPrompt:'前端',preferredModel:fauxModelRef('a')});
+ const other=await invoke('role:create',{name:'后端',systemPrompt:'后端'});
+ const m=await invoke('memory:write',{scopeType:'role',scopeId:role.id,title:'Docker 校验',content:'OWN_DOCKER_RULE'});
+ await invoke('memory:write',{scopeType:'role',scopeId:other.id,title:'Docker 记录',content:'OTHER_PRIVATE_DOCKER'});
+ const task=await invoke('task:create',{roleId:role.id});
+ let bodies:string[]=[];
+ const respond=(context:unknown)=>{bodies.push(JSON.stringify(context));return fauxAssistantMessage('已回答');};
+ ensureFauxRegistered('a').setResponses([respond]);await invoke('task:prompt',{taskId:task.id,text:'解释 Docker 校验方式'});expect((await done(task.id)).status).toBe('done');
+ expect(bodies[0]).toContain('OWN_DOCKER_RULE');expect(bodies[0]).not.toContain('OTHER_PRIVATE_DOCKER');
+ expect(await invoke('memory:usage',{roleId:role.id,memoryId:m.id})).toMatchObject({referenceTotal:1,references:[{version:1,taskId:task.id,stage:'execution'}]});
+ await invoke('memory:revise',{memoryId:m.id,content:'NEW_DOCKER_RULE'});
+ ensureFauxRegistered('a').setResponses([respond]);await invoke('task:prompt',{taskId:task.id,text:'再解释 Docker 校验'});await done(task.id);
+ expect(bodies[1]).toContain('NEW_DOCKER_RULE');expect(bodies[1]).not.toContain('OWN_DOCKER_RULE');
+ await invoke('memory:forget',{memoryId:m.id});
+ ensureFauxRegistered('a').setResponses([respond]);await invoke('task:prompt',{taskId:task.id,text:'再说一次 Docker 校验'});await done(task.id);
+ expect(bodies[2]).not.toContain('NEW_DOCKER_RULE');
+ const before=await invoke('memory:usage',{roleId:role.id,memoryId:m.id});expect(before.referenceTotal).toBe(2);
+ await core.shutdown();core=await createHarnessCore({dataDir:dir,enableFaux:true});
+ expect(await invoke('memory:usage',{roleId:role.id,memoryId:m.id})).toEqual(before);
+ await invoke('task:delete',{taskId:task.id});
+ expect(await invoke('memory:usage',{roleId:role.id,memoryId:m.id})).toMatchObject({referenceTotal:0,summary:{referencedMemories:0}});
+ expect(core.memory.get(m.id).status).toBe('forgotten');
+});
+it('工作台私有记忆仅注入本角色执行，共享协调与规划不注入；删除工作台一并清理',async()=>{
+ const assistant=core.roles.seedDefault();
+ const roles=[];
+ for(const [name,model] of [['前端','a'],['后端','b']]) roles.push(await invoke('role:create',{name,systemPrompt:name,preferredModel:fauxModelRef(model)}));
+ const [a,b]=roles;
+ const ma=core.memory.write({scopeType:'role',scopeId:a.id,title:'Docker 前端',content:'FRONT_PRIVATE_DOCKER'});
+ const mb=core.memory.write({scopeType:'role',scopeId:b.id,title:'Docker 后端',content:'BACK_PRIVATE_DOCKER'});
+ const md=core.memory.write({scopeType:'role',scopeId:assistant.id,title:'Docker 路由',content:'ROUTE_PRIVATE_DOCKER'});
+ const w=await invoke('workbench:create',{title:'路由记忆',roleIds:[a.id,b.id]});
+ let routeContext='',planContext='',executionContext='';
+ ensureFauxRegistered().setResponses([(ctx)=>{routeContext=JSON.stringify(ctx);return fauxAssistantMessage(JSON.stringify({action:'dispatch',reply:'前端处理',roleIds:[a.id],assignments:[{roleId:a.id,instructions:'Docker 前端检查',files:['front.txt'],dependsOn:[]}]}));}]);
+ ensureFauxRegistered('a').setResponses([(ctx)=>{planContext=JSON.stringify(ctx);return fauxAssistantMessage(JSON.stringify({plan:'检查前端',contracts:[]}));},(ctx)=>{executionContext=JSON.stringify(ctx);return fauxAssistantMessage('检查完毕');}]);
+ await invoke('workbench:send',{id:w.id,text:'检查 Docker 前端',requestId:'q'});
+ for(let i=0;i<300;i++){const state=core.workbench.get(w.id);if(state.phase==='error')throw Error(JSON.stringify(state.messages.at(-1)));if(state.phase==='awaiting_review')break;await new Promise(r=>setTimeout(r,10));}
+ expect(core.workbench.get(w.id).phase).toBe('awaiting_review');
+ expect(routeContext).not.toContain('ROUTE_PRIVATE_DOCKER');expect(routeContext).not.toContain('FRONT_PRIVATE_DOCKER');
+ expect(planContext).not.toContain('FRONT_PRIVATE_DOCKER');expect(planContext).not.toContain('BACK_PRIVATE_DOCKER');
+ expect(executionContext).toContain('FRONT_PRIVATE_DOCKER');expect(executionContext).not.toContain('BACK_PRIVATE_DOCKER');
+ expect(core.memory.usage.get(a.id,ma.id).references.map(r=>r.stage).sort()).toEqual(['execution']);
+ expect(core.memory.usage.get(b.id,mb.id).referenceTotal).toBe(0);
+ expect(core.memory.usage.get(assistant.id,md.id).referenceTotal).toBe(0);
+ await invoke('workbench:delete',{id:w.id});
+ expect(core.memory.usage.get(a.id,ma.id).referenceTotal).toBe(0);
+ expect(core.memory.usage.get(assistant.id,md.id).referenceTotal).toBe(0);
+ expect(core.memory.get(ma.id).content).toBe('FRONT_PRIVATE_DOCKER');
+});
