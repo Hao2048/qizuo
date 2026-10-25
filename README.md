@@ -224,7 +224,9 @@ PIH_SKIP_ABI=1 pnpm smoke               # 已匹配 Electron ABI 时运行启动
 
 欢迎在 [Issues](https://github.com/Hao2048/qizuo/issues) 提交可复现问题：软件版本、系统、操作步骤、预期与实际结果，以及脱敏日志。不要提交 API Key、OAuth 令牌、Cookie 或完整私人会话。
 
-**许可证：** 当前仓库尚未声明项目许可证。公开可见不等于授予任意再分发或商业使用许可；第三方依赖分别遵循各自许可证。
+**许可证：** 本项目采用 [PolyForm Noncommercial License 1.0.0](LICENSE.md)，允许协议规定的非商业使用、修改与再分发。未经权利人另行书面授权，不允许商业用途。分发原版或修改版时须保留协议及 [版权声明](NOTICE)。第三方依赖仍遵循各自许可证。
+
+这是带有非商业限制的源码可用许可，不是 OSI 意义上的开源许可。许可限制针对本软件，不自动把同一协议套用到使用者的文档、代码或其他生成成果上；是否属于商业使用仍以协议定义为准。[官方许可说明](https://polyformproject.org/licenses/noncommercial/1.0.0)。商业授权请联系 [仓库所有者](https://github.com/Hao2048)。
 
 ## 致谢
 
