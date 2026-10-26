@@ -98,3 +98,11 @@ describe("MemoryService 角色存储", () => {
 		expect(inB).toHaveLength(0);
 	});
 });
+
+it("retrieves older relevant role memory beyond the latest hundred entries",()=>{
+ const old=memory.write({scopeType:"role",scopeId:"a",title:"unique protocol",content:"stable guidance"});
+ db.prepare("UPDATE memories SET updated_at=1 WHERE id=?").run(old.id);
+ for(let i=0;i<101;i++)memory.write({scopeType:"role",scopeId:"a",title:`unrelated ${i}`,content:"daily note"});
+ memory.write({scopeType:"role",scopeId:"b",title:"unique protocol",content:"other role private"});
+ expect(memory.retrieve({scopes:[{scopeType:"role",scopeId:"a"}],query:"unique protocol"}).map(m=>m.id)).toEqual([old.id]);
+});

@@ -927,7 +927,7 @@ export const commandSchemas = {
     output: Type.Object({ tasks: Type.Array(TaskInfo) }),
   },
   "task:get": {
-    input: Type.Object({ taskId: Type.String() }),
+    input: Type.Object({ taskId: Type.String(), includeTranscript: Type.Optional(Type.Boolean()) }),
     output: Type.Object({
       task: TaskInfo,
       transcript: Type.Array(TranscriptMessage),

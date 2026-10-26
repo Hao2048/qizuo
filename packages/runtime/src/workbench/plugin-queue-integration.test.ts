@@ -24,7 +24,7 @@ beforeEach(async()=>{
 afterEach(async()=>{unblock?.();unblock=undefined;await core.shutdown();rmSync(dir,{recursive:true,force:true});});
 it('two plugins sharing a computer never interleave role sessions, keep approvals, and clear the UI after completion',async()=>{
  const events:string[]=[];let gateResolve!:()=>void;const gate=new Promise<void>(r=>gateResolve=r);unblock=gateResolve;
- vi.mocked(callWorkbenchPlugin).mockImplementation(async(_dir,_server,_tool,args)=>{events.push(String(args.owner));if(events.length===1)await gate;return 'ok';});
+ vi.mocked(callWorkbenchPlugin).mockImplementation(async(_dir,_server,_tool,args)=>{events.push(String(args.owner));if(events.length===1)await gate;return {content:[{type:'text',text:'ok'}],details:{}};});
  ensureFauxRegistered('a').setResponses([json({plan:'操作',contracts:[]}),plugin('desktop_one','a1'),plugin('desktop_two','a2'),fauxAssistantMessage('完成')]);
  ensureFauxRegistered('b').setResponses([json({plan:'操作',contracts:[]}),plugin('desktop_two','b1'),fauxAssistantMessage('完成')]);
  const id=await start([a,b],'sessions');
@@ -38,7 +38,7 @@ it('two plugins sharing a computer never interleave role sessions, keep approval
 });
 it('stopping a queued workbench does not cancel the holder in another workbench or invoke the queued plugin',async()=>{
  const gate=new Promise<void>(r=>unblock=r),events:string[]=[];
- vi.mocked(callWorkbenchPlugin).mockImplementation(async(_dir,_server,_tool,args)=>{events.push(String(args.owner));await gate;return 'ok';});
+ vi.mocked(callWorkbenchPlugin).mockImplementation(async(_dir,_server,_tool,args)=>{events.push(String(args.owner));await gate;return {content:[{type:'text',text:'ok'}],details:{}};});
  ensureFauxRegistered('a').setResponses([json({plan:'操作',contracts:[]}),plugin('desktop_one','a'),fauxAssistantMessage('完成')]);
  ensureFauxRegistered('b').setResponses([json({plan:'操作',contracts:[]}),plugin('desktop_two','b'),fauxAssistantMessage('完成')]);
  const first=await start([a],'holder');await until(async()=>{await approve([first]);return events.length===1;});
@@ -50,7 +50,7 @@ it('stopping a queued workbench does not cancel the holder in another workbench 
 it('explicit parallel mode bypasses the exclusive lease for a concurrency-capable plugin',async()=>{
  await call('mcp:setResourcePolicy',{name:'desktop_one',exclusive:false,resourceGroup:''});
  const gate=new Promise<void>(r=>unblock=r),events:string[]=[];
- vi.mocked(callWorkbenchPlugin).mockImplementation(async(_dir,_server,_tool,args)=>{events.push(String(args.owner));await gate;return 'ok';});
+ vi.mocked(callWorkbenchPlugin).mockImplementation(async(_dir,_server,_tool,args)=>{events.push(String(args.owner));await gate;return {content:[{type:'text',text:'ok'}],details:{}};});
  for(const [name,owner]of [['a','a'],['b','b']])ensureFauxRegistered(name).setResponses([json({plan:'并行查询',contracts:[]}),plugin('desktop_one',owner!),fauxAssistantMessage('完成')]);
  const id=await start([a,b],'parallel');await until(async()=>{await approve([id]);return events.length===2;});
  unblock!();await until(()=>core.workbench.get(id).phase==='awaiting_review');expect(events.sort()).toEqual(['a','b']);
@@ -61,4 +61,15 @@ it('restart clears stale resource indicators instead of replaying plugin operati
  core.db.prepare('UPDATE workbenches SET body=? WHERE id=?').run(JSON.stringify(state),w.id);
  await core.shutdown();core=await createHarnessCore({dataDir:dir,enableFaux:true});
  expect(core.workbench.get(w.id).participants[0]!.pluginResources).toBeUndefined();expect(callWorkbenchPlugin).not.toHaveBeenCalled();
+});
+
+it('passes image and structured text from the granted plugin to the calling role',async()=>{
+ const pixel='iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aLasAAAAASUVORK5CYII=';
+ vi.mocked(callWorkbenchPlugin).mockResolvedValue({content:[{type:'image',data:pixel,mimeType:'image/png'},{type:'text',text:'{"artifact":"chart"}'}],details:{}});
+ let received:unknown;
+ ensureFauxRegistered('a').setResponses([json({plan:'读取插件图表',contracts:[]}),plugin('desktop_one','a'),ctx=>{received=ctx.messages.filter(m=>m.role==='toolResult').flatMap(m=>m.role==='toolResult'?m.content:[]);return fauxAssistantMessage('已收到结果');}]);
+ const id=await start([a],'multimodal');
+ await until(async()=>{await approve([id]);return core.workbench.get(id).phase==='awaiting_review';});
+ expect(received).toEqual(expect.arrayContaining([{type:'image',data:pixel,mimeType:'image/png'},{type:'text',text:'{"artifact":"chart"}'}]));
+ expect(callWorkbenchPlugin).toHaveBeenCalledTimes(1);
 });

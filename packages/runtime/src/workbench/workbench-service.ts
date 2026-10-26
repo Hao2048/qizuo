@@ -1,6 +1,6 @@
 import {ArtifactPreview} from "./artifact-preview.js";
 import {bindContractSchemas} from "./contract-schemas.js";
-import {ExecutionStore,artifactFiles,sameArtifacts,type ArtifactVersion,type Assignment} from "./execution-store.js";
+import {ExecutionStore,artifactFiles,sameArtifacts,type ArtifactVersion,type Assignment,type ExecutionPlan} from "./execution-store.js";
 import {modelSubmission} from "./model-submission.js";
 import {deliveryToken,submitDeliverable,type DeliverySubmission} from "./delivery-submit.js";
 import {publicRoleContext, executionReceipt} from "./shared-context.js";
@@ -33,6 +33,7 @@ import { Type } from "typebox";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import {
   lstatSync,
+  realpathSync,
   readFileSync,
   mkdirSync,
   rmSync,
@@ -1057,8 +1058,10 @@ export class WorkbenchService {
       !w.participants.some((p) => p.roleId === input.roleId && p.enabled)
     )
       throw new Error("指定角色未加入或已暂停");
-    const saved=this.executions.latest(w.id);
-    const changedContract=saved?.assignments.some(a=>a.contractVersions!==undefined&&a.contractVersions!==JSON.stringify(w.contracts.filter(c=>c.roles.includes(a.roleId)).map(c=>[c.id,c.version]).sort()));
+    const staged=this.executions.latestState(w.id);
+    const awaitingConfirmation=staged&&!staged.ready&&staged.plan.planningComplete;
+    const saved=awaitingConfirmation?staged.plan:this.executions.latest(w.id);
+    const changedContract=!awaitingConfirmation&&saved?.assignments.some(a=>a.contractVersions!==undefined&&a.contractVersions!==JSON.stringify(w.contracts.filter(c=>c.roles.includes(a.roleId)).map(c=>[c.id,c.version]).sort()));
     if(!(input.attachmentIds?.length)&&/^(?:请)?(?:继续(?:执行|任务|未完成的工作)?|恢复(?:执行|任务)|接着做)(?:吧)?[。！!\s]*$/.test(input.text.trim())&&
        (saved||w.roundProgress)&&!changedContract)return this.resume({id:w.id,roleId:input.roleId,requestId:input.requestId});
     this.opts.db.transaction(() => {
@@ -1097,13 +1100,17 @@ export class WorkbenchService {
   }
   /** A continuation executes saved host assignments, never a new model-generated plan. */
   resume(input: {id:string;roleId?:string;requestId:string}) {
-    const w=this.get(input.id);
+    let w=this.get(input.id);
     if(w.messages.some(m=>m.requestId===input.requestId&&m.kind==="request"&&m.sender==="你"))return {accepted:true};
     if(this.#jobs.has(w.id)||this.#verifying.has(w.id)||w.proposals.some(p=>p.status==="pending"))throw Error("请先结束当前执行并处理待确认的共同约定");
     const target=input.roleId?w.participants.find(p=>p.roleId===input.roleId):undefined;
     if(input.roleId&&!target)throw Error("角色未加入本任务");
     const priorRun=target?.taskId?this.executions.run(target.taskId):undefined;
-    let plan=priorRun?this.executions.get(w.id,priorRun.sourceRequestId):this.executions.latest(w.id);
+    const staged=this.executions.latestState(w.id);
+    let plan=staged&&!staged.ready&&staged.plan.planningComplete
+      ?this.confirmPlan(w.id,staged.plan)
+      :priorRun?this.executions.get(w.id,priorRun.sourceRequestId):this.executions.latest(w.id);
+    w=this.get(input.id);
     // One explicit compatibility import; never infer missing file ownership from prose.
     if(!plan&&w.roundProgress){
       const assignments:Assignment[]=[];
@@ -1431,6 +1438,8 @@ export class WorkbenchService {
       // Include historical scopes to recover runs created before this invariant existed.
       const previousPaths = p ? this.previousOwnedPaths(id, p.roleId, p.inheritedTaskId) : [];
       a.files = validOwnedPaths([...a.files, ...previousPaths]);
+      const inputs=p?.taskId?this.executions.run(p.taskId)?.inputs:undefined;
+      a.dependsOn=[...new Set([...a.dependsOn,...(inputs??[]).filter(input=>original.participants.find(p=>p.roleId===input.roleId)?.status!=="applied").map(input=>input.roleId)])];
       const known=p?.deliverables??[];
       const proposed=a.deliverables??[];
       const preserved=known.length?[...known,...proposed.filter(d=>!known.some(old=>old.path===d?.path))]:proposed;
@@ -1446,10 +1455,11 @@ export class WorkbenchService {
         throw new Error("修改需要其他角色参与，请改由任务助手协调");
       if (
         a.dependsOn.some(
-          (roleId) => !assignments.some((item) => item.roleId === roleId),
+          (roleId) => !assignments.some((item) => item.roleId === roleId) &&
+            !original.participants.some(p=>p.roleId===roleId&&!p.unavailable&&p.taskId&&["done","awaiting_review","applied"].includes(p.status)),
         )
       )
-        throw new Error("分工依赖了未参与本轮的角色");
+        throw new Error("分工依赖角色未参与本轮且尚未交付或不可用，请先处理上游成果");
     }
     for (const assignment of assignments) {
       for (const other of original.participants.filter(
@@ -1473,7 +1483,7 @@ export class WorkbenchService {
         (a) =>
           !ordered.includes(a) &&
           a.dependsOn.every((roleId) =>
-            ordered.some((done) => done.roleId === roleId),
+            !assignments.some(item=>item.roleId===roleId)||ordered.some((done) => done.roleId === roleId),
           ),
       );
       if (!next) throw new Error("分工存在循环依赖，请调整方案");
@@ -1524,14 +1534,30 @@ export class WorkbenchService {
       await this.planRole(id, assignment, text, requestId, signal);
       this.change(id,w=>setRoundStage(w,requestId,assignment.roleId,"ready"));
     }
+    signal.throwIfAborted();
+    const planned:ExecutionPlan={requestId,goal:text,assignments:ordered,planningComplete:true};
+    this.executions.stage(id,planned);
     if (this.get(id).proposals.some((p) => p.status === "pending")) return;
-    for(const a of ordered){
-      const state=this.get(id);
-      a.deliverables=structuredClone(state.participants.find(p=>p.roleId===a.roleId)?.deliverables??a.deliverables??[]);
-      a.contractVersions=JSON.stringify(state.contracts.filter(c=>c.roles.includes(a.roleId)).map(c=>[c.id,c.version]).sort());
-    }
-    this.executions.confirm(id,{requestId,goal:text,assignments:ordered});
-    await this.runAssignments(id,ordered,text,requestId,signal);
+    const confirmed=this.confirmPlan(id,planned);
+    await this.runAssignments(id,confirmed.assignments,text,requestId,signal);
+  }
+  /** Completed planning survives decisions/restart; failed partial planning is never executable. */
+  private confirmPlan(id:string,plan:ExecutionPlan):ExecutionPlan {
+    const state=this.get(id);
+    if(state.proposals.some(p=>p.status==="pending"))throw Error("请先处理共同约定的变更方案");
+    const assignments=plan.assignments.map(a=>{
+      const participant=state.participants.find(p=>p.roleId===a.roleId);
+      if(!participant)throw Error("计划中的角色已变更，请先确认职责交接");
+      const deliverables=bindContractSchemas(participant.deliverables??a.deliverables??[],state.contracts,a.roleId,a.files);
+      validateDeliverables(deliverables,a.files);
+      return {...a,deliverables,contractVersions:JSON.stringify(state.contracts.filter(c=>c.roles.includes(a.roleId)).map(c=>[c.id,c.version]).sort())};
+    });
+    const confirmed={...plan,assignments};
+    this.opts.db.transaction(()=>{
+      this.change(id,w=>{for(const a of assignments){const p=w.participants.find(p=>p.roleId===a.roleId)!;p.deliverables=structuredClone(a.deliverables);}});
+      this.executions.confirm(id,confirmed);
+    });
+    return confirmed;
   }
   private async runAssignments(id:string,ordered:Assignment[],text:string,requestId:string,signal:AbortSignal) {
     const assignments=ordered;
@@ -2609,6 +2635,25 @@ export class WorkbenchService {
     };
     return [
       {
+        exposure:"deferred",defaultActive:false,
+        name:"workbench_read_skill",label:"读取本角色技能知识",
+        description:"只读本角色已绑定的本地技能 Markdown 知识。省略 name 列出技能，指定 name 读取 SKILL.md，path 可读取技能内的其他 .md 文件。不会加载扩展、执行脚本或授予命令和网络权限。",
+        parameters:Type.Object({name:Type.Optional(Type.String()),path:Type.Optional(Type.String())},{additionalProperties:false}),
+        execute:async(_callId,input)=>{
+          guard();
+          const task=this.opts.db.prepare("SELECT role_snapshot FROM tasks WHERE id=?").get(taskId) as {role_snapshot:string};
+          const names=(JSON.parse(task.role_snapshot) as {boundSkills?:string[]}).boundSkills??[];
+          const {name,path="SKILL.md"}=input as {name?:string;path?:string};
+          if(!name)return {content:[{type:"text",text:JSON.stringify(names)}],details:{}};
+          if(!names.includes(name))throw Error("此技能未绑定到当前角色");
+          const skill=safePath(join(this.opts.pi.piDir,"skills"),name);
+          // Resolve only the explicitly bound installation; nested symlinks are rejected.
+          const root=realpathSync(skill),file=safePath(root,path);
+          if(!/\.md$/i.test(path) || !lstatSync(file).isFile() || lstatSync(file).size>256*1024)throw Error("仅支持读取技能内不超过 256 KiB 的 Markdown 知识文件");
+          return {content:[{type:"text",text:readFileSync(file,"utf8")}],details:{}};
+        },
+      } as ToolDefinition,
+      {
         name:"workbench_delivery_contract",label:"读取本角色交付契约",
         description:"只读当前角色的有效交付路径、格式、JSON Schema/字段和章节ID；不返回其他角色的私有配置。提交前读取contractToken。没有声明时继续使用旧文件工具，不自行扩大契约。",
         parameters:Type.Object({}, {additionalProperties:false}),
@@ -2685,7 +2730,7 @@ export class WorkbenchService {
             if(current.exclusive!==policy.exclusive || current.resourceKey!==policy.resourceKey)throw Error("插件使用方式已变化，请重新发起调用");
             return callWorkbenchPlugin(this.opts.pi.piDir,p.server,p.tool,p.arguments??{},bounded);
           };
-          const text=policy.exclusive ? await this.#resources.run(policy.resourceKey,taskId,bounded,(status,position)=>{
+          const result=policy.exclusive ? await this.#resources.run(policy.resourceKey,taskId,bounded,(status,position)=>{
             if(this.#closed)return;
             this.change(row.workbench_id,w=>{
               const participant=w.participants.find(p=>p.taskId===taskId);if(!participant)return;
@@ -2695,7 +2740,7 @@ export class WorkbenchService {
             });
           },call) : await call();
           guard();
-          return { content: [{ type: "text", text }], details: {} };
+          return result;
         },
       } as ToolDefinition,
       {

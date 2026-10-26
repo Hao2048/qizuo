@@ -8,7 +8,7 @@ export type Assignment = {
  sourceRequestId?:string; contractVersions?:string; expectedInputs?:ArtifactVersion[];
 };
 export type ArtifactVersion = {roleId:string;taskId:string;files:{path:string;hash:string}[]};
-export type ExecutionPlan = {requestId:string;goal:string;assignments:Assignment[]};
+export type ExecutionPlan = {requestId:string;goal:string;assignments:Assignment[];planningComplete?:true};
 type RunReceipt = {sourceRequestId:string;assignment:Assignment;inputs:ArtifactVersion[];outputs?:ArtifactVersion};
 
 export function artifactFiles(root:string,owned:string[]):ArtifactVersion['files'] {

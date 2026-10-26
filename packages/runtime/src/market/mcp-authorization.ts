@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { existsSync } from "node:fs";
 import { pathToFileURL, fileURLToPath } from "node:url";
 import type { LoadedMcpConfig, McpExtensionOptions, McpServerEntry } from "@earendil-works/pi-coding-agent";
+import type { TextContent, ImageContent } from "@earendil-works/pi-ai";
 import { sharedPreparation } from "../pi/resource-prewarm.js";
 
 type Options = { cwd: string; agentDir: string; openUrl(url: string): void; log(line: string): void; error(line: string): void };
@@ -125,7 +126,7 @@ export async function analyzeZaiImage(agentDir:string,apiKey:string,chinese:bool
 }
 
 /** Workbench bridge: only explicitly granted remote servers; never start a local plugin process. */
-export async function callWorkbenchPlugin(agentDir:string,name:string,tool:string|undefined,args:Record<string,unknown>,signal:AbortSignal):Promise<string>{
+export async function callWorkbenchPlugin(agentDir:string,name:string,tool:string|undefined,args:Record<string,unknown>,signal:AbortSignal):Promise<{content:(TextContent|ImageContent)[];details:Record<string,unknown>}>{
  signal.throwIfAborted();const modules=await sdk();const extension=await mcpExtensionOptions(agentDir);
  // Ignore project MCP files: they are editable by model-generated code.
  const loaded=modules.loadMcpConfig({agentDir,cwd:agentDir,projectTrusted:false}) as LoadedMcpConfig;
@@ -134,11 +135,25 @@ export async function callWorkbenchPlugin(agentDir:string,name:string,tool:strin
  const connection=new modules.McpServerConnection({entry:{...entry,config:{...entry.config,timeout:30}},cwd:agentDir,createTransport:modules.createDefaultTransport,credentials:extension.credentials,onTools:()=>{}});
  const abort=()=>{void connection.close().catch(()=>{});};signal.addEventListener("abort",abort,{once:true});
  try{signal.throwIfAborted();await connection.getClient();signal.throwIfAborted();
- if(!tool)return JSON.stringify(connection.tools.filter((t:{name:string})=>entry.config.toolExposure?.[t.name]!=="hidden" && entry.config.exposure!=="hidden").map((t:{name:string;description?:string;inputSchema:unknown})=>({name:t.name,description:t.description,inputSchema:t.inputSchema}))).slice(0,24000);
+ if(!tool)return {content:[{type:"text",text:JSON.stringify(connection.tools.filter((t:{name:string})=>entry.config.toolExposure?.[t.name]!=="hidden" && entry.config.exposure!=="hidden").map((t:{name:string;description?:string;inputSchema:unknown})=>({name:t.name,description:t.description,inputSchema:t.inputSchema}))).slice(0,24000)}],details:{}};
  if(entry.config.exposure==="hidden" || entry.config.toolExposure?.[tool]==="hidden" || !connection.tools.some((t:{name:string})=>t.name===tool))throw new Error("插件工具不存在或不可用");
  const result=await connection.callTool(tool,args,{signal});signal.throwIfAborted();
  if(result.isError)throw new Error("插件返回执行失败");
- return (result.content??[]).filter((x:{type:string})=>x.type==="text").map((x:{text:string})=>x.text).join("\n").slice(0,24000);
+ const content:(TextContent|ImageContent)[]=[];
+ let remaining=24000, imageBytes=0;
+ const addText=(text:string)=>{if(remaining>0){content.push({type:"text",text:text.slice(0,remaining)});remaining-=text.length;}};
+ for(const item of result.content??[]){
+   if(item.type==="text")addText(item.text);
+   else if(item.type==="image"){
+     imageBytes+=item.data.length;
+     if(imageBytes>14_000_000)throw new Error("插件图片结果过大");
+     content.push({type:"image",data:item.data,mimeType:item.mimeType});
+   }else if(item.type==="resource" && typeof item.resource?.text==="string")addText(item.resource.text);
+   else addText(`[插件返回暂不支持的内容类型：${item.type}；未读取外部资源]`);
+ }
+ if(result.structuredContent!==undefined)addText(JSON.stringify(result.structuredContent));
+ if(!content.length)addText("插件执行完成，未返回内容。");
+ return {content,details:{}};
  }catch{if(signal.aborted)throw new Error("插件调用已取消");throw new Error("插件调用失败，请检查授权、参数和网络；未自动重试");}
  finally{signal.removeEventListener("abort",abort);await connection.close().catch(()=>{});}
 }

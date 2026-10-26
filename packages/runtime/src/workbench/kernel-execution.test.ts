@@ -1,5 +1,5 @@
 import {afterEach,beforeEach,expect,it} from 'vitest';
-import {mkdtempSync,rmSync,readFileSync,writeFileSync} from 'node:fs';
+import {mkdtempSync,mkdirSync,rmSync,readFileSync,writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';import {join} from 'node:path';
 import {fauxAssistantMessage,fauxToolCall} from '@earendil-works/pi-ai';
 import {createHarnessCore,type HarnessCore} from '../core/harness-core.js';
@@ -181,4 +181,72 @@ it('includes nested built website outputs in delivery receipts and the artifact 
  await call('workbench:send',{id:w.id,text:'生成静态构建',requestId:'dist'});await until(w.id,x=>{if(['error','stopped'].includes(x.phase))throw Error(JSON.stringify(x.messages.slice(-2)));return x.phase==='awaiting_review';});
  const review=await call('workbench:review',{id:w.id,roleId:a});expect(review.files.map((f:any)=>f.path)).toEqual(['dist/assets/main.css','dist/index.html']);
  const {url}=await call('workbench:preview',{id:w.id,roleId:a,token:review.token,path:'dist/index.html'});const cookie=(await fetch(url,{redirect:'manual'})).headers.get('set-cookie')!.split(';')[0];expect(await(await fetch(new URL(url).origin+'/assets/main.css',{headers:{cookie}})).text()).toBe('body{color:green}');
+});
+
+it.each(['choose','keep'] as const)('continues a fully planned first-round conflict after %s and restart without routing or replanning',async(decision)=>{
+ const schema=(version:string)=>JSON.stringify({$id:'design/content.json',type:'object',required:['version'],properties:{version:{const:version}}});
+ const w=await call('workbench:create',{title:'首次接口决策',roleIds:[a,b]});dispatch();
+ ensureFauxRegistered('a').setResponses([json({plan:'设计',contracts:[{id:'layout',title:'布局',content:schema('one'),roles:[a,b]}]})]);
+ ensureFauxRegistered('b').setResponses([json({plan:'前端',contracts:[{id:'layout',title:'布局',content:schema('two'),roles:[a,b]}]})]);
+ await call('workbench:send',{id:w.id,text:'开发网站',requestId:'conflict'});
+ let state=await until(w.id,x=>x.phase==='waiting_decision');
+ // Decisions are only accepted once the planning job has fully released its lock.
+ await new Promise(r=>setTimeout(r,20));state=core.workbench.get(w.id);
+ expect(state.participants.every((p:any)=>p.taskId===null)).toBe(true);
+ await call(decision==='choose'?'workbench:choose':'workbench:keepContract',{id:w.id,...(decision==='choose'?{proposalId:state.proposals[0]!.id}:{contractId:'layout'}),revision:state.revision});
+ await core.shutdown();core=await createHarnessCore({dataDir:dir,enableFaux:true});
+ let rerouted=false;ensureFauxRegistered().setResponses([()=>{rerouted=true;return fauxAssistantMessage('must not route')}]);
+ ensureFauxRegistered('a').setResponses([tool('write',{path:'design/spec.txt',content:decision==='choose'?'two':'one'}),tool('write',{path:'design/content.json',content:JSON.stringify({version:decision==='choose'?'two':'one'})}),fauxAssistantMessage('完成')]);
+ ensureFauxRegistered('b').setResponses([tool('read',{path:'design/spec.txt'}),tool('write',{path:'site/page.txt',content:'page'}),fauxAssistantMessage('完成')]);
+ await call('workbench:send',{id:w.id,text:'继续',requestId:'after-choice'});
+ state=await until(w.id,x=>['awaiting_review','error'].includes(x.phase));
+ expect(state.phase).toBe('awaiting_review');expect(rerouted).toBe(false);
+ expect(state.contracts[0]!.content).toBe(schema(decision==='choose'?'two':'one'));
+ expect(state.participants[0]!.deliveryCheck?.status).toBe('passed');
+});
+
+it.each(['implicit','explicit','restart'])('retains unapplied upstream inputs for a downstream-only new request (%s) without waking the producer',async(mode)=>{
+ const w=await call('workbench:create',{title:'增量交接',roleIds:[a,b]});dispatch();
+ ensureFauxRegistered('a').setResponses([json({plan:'设计',contracts:[]}),tool('write',{path:'design/spec.txt',content:'design-v1'}),fauxAssistantMessage('完成')]);
+ ensureFauxRegistered('b').setResponses([json({plan:'前端',contracts:[]}),tool('write',{path:'site/page.txt',content:'page'}),fauxAssistantMessage('完成')]);
+ await call('workbench:send',{id:w.id,text:'开发网站',requestId:'inputs-first'});let state=await until(w.id,x=>x.phase==='awaiting_review');
+ const producer=state.participants.find((p:any)=>p.roleId===a)!.taskId;
+ if(mode==='restart'){await core.shutdown();core=await createHarnessCore({dataDir:dir,enableFaux:true});}
+ let wokeProducer=false;ensureFauxRegistered('a').setResponses([()=>{wokeProducer=true;return fauxAssistantMessage('must not wake')}]);
+ ensureFauxRegistered().setResponses([json({reply:'仅修改前端',action:'dispatch',roleIds:[b],assignments:[{roleId:b,instructions:'沿用设计优化前端',files:['site/'],dependsOn:mode==='explicit'?[a]:[]}]})]);
+ ensureFauxRegistered('b').setResponses([json({plan:'优化前端',contracts:[]}),tool('read',{path:'design/spec.txt'}),tool('write',{path:'site/page.txt',content:'page-v2'}),fauxAssistantMessage('完成')]);
+ await call('workbench:send',{id:w.id,text:'仅优化前端，沿用设计，不修改设计',requestId:'inputs-second'});state=await until(w.id,x=>['awaiting_review','error'].includes(x.phase));
+ expect(state.phase).toBe('awaiting_review');expect(wokeProducer).toBe(false);expect(state.participants.find((p:any)=>p.roleId===a)!.taskId).toBe(producer);
+ const consumer=state.participants.find((p:any)=>p.roleId===b)!.taskId;
+ const run=core.db.prepare('SELECT root FROM workbench_runs WHERE task_id=?').get(consumer) as {root:string};
+ expect(readFileSync(join(run.root,'design/spec.txt'),'utf8')).toBe('design-v1');
+ const receipt=core.db.prepare("SELECT body FROM workbench_run_receipts WHERE task_id=?").get(consumer) as {body:string};
+ expect(JSON.parse(receipt.body).inputs).toEqual([expect.objectContaining({roleId:a,taskId:producer})]);
+});
+
+it('makes bound skill knowledge readable without loading extensions or granting execution',async()=>{
+ core.roles.update(a,{boundSkills:['design-guide']});
+ const skill=join(core.pi.piDir,'skills','design-guide');mkdirSync(skill,{recursive:true});
+ writeFileSync(join(skill,'SKILL.md'),'# Design guide\nunique-design-knowledge');
+ writeFileSync(join(skill,'run.js'),'SHOULD_NOT_EXECUTE');
+ const hidden=join(core.pi.piDir,'skills','private-guide');mkdirSync(hidden,{recursive:true});writeFileSync(join(hidden,'SKILL.md'),'OTHER_ROLE_SECRET');
+ const w=await call('workbench:create',{title:'技能隔离',roleIds:[a]});
+ ensureFauxRegistered().setResponses([json({reply:'设计',action:'dispatch',roleIds:[a],assignments:[{roleId:a,instructions:'参考技能',files:['design/'],dependsOn:[]}]})]);
+ let context='';ensureFauxRegistered('a').setResponses([json({plan:'设计',contracts:[]}),
+ tool('tool_search',{query:'workbench_read_skill',limit:1}),tool('workbench_read_skill',{name:'design-guide'}),tool('workbench_read_skill',{name:'private-guide'}),
+ tool('workbench_read_skill',{name:'design-guide',path:'../private-guide/SKILL.md'}),
+ tool('workbench_read_skill',{name:'design-guide',path:'run.js'}),ctx=>{context=JSON.stringify(ctx);return tool('write',{path:'design/spec.txt',content:'safe'});},fauxAssistantMessage('完成')]);
+ await call('workbench:send',{id:w.id,text:'参考绑定技能完成设计',requestId:'skills'});
+ const state=await until(w.id,x=>['awaiting_review','error'].includes(x.phase));
+ expect(state.phase,JSON.stringify(state.messages)).toBe('awaiting_review');expect(context).toContain('unique-design-knowledge');
+ expect(context).toContain('此技能未绑定');expect(context).toContain('路径必须位于');expect(context).toContain('仅支持读取技能');
+ expect(context).not.toContain('OTHER_ROLE_SECRET');expect(context).not.toContain('SHOULD_NOT_EXECUTE');
+ expect(state.access?.some((access:any)=>access.commands)??false).toBe(false);
+});
+it('polls task status without reading or parsing transcript snapshots',async()=>{
+ const task=await call('task:create',{title:'状态',roleId:a});
+ core.db.prepare("INSERT INTO task_events(task_id,type,payload,created_at) VALUES(?,'transcript_snapshot',?,?)").run(task.id,'invalid-json',Date.now());
+ const status=await call('task:get',{taskId:task.id,includeTranscript:false});
+ expect(status.task.id).toBe(task.id);expect(status.transcript).toEqual([]);
+ await expect(call('task:get',{taskId:task.id})).rejects.toThrow();
 });

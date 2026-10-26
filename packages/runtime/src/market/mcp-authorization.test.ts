@@ -93,21 +93,29 @@ it("real agent MCP options load the harness config and exclude untrusted project
 
 it("workbench remote bridge keeps credentials host-side and rejects local, hidden and disabled plugins",async()=>{
  const {writeFileSync}=await import("node:fs");const {callWorkbenchPlugin}=await import("./mcp-authorization.js");
- const dir=mkdtempSync(join(tmpdir(),"pih-wb-mcp-"));const calls:string[]=[];let token="";
+ const dir=mkdtempSync(join(tmpdir(),"pih-wb-mcp-"));const calls:string[]=[];let token="";let output:Record<string,unknown>={content:[{type:"text",text:"remote result"}]};
  vi.stubGlobal("fetch",async(url:string|Request|URL,init?:RequestInit)=>{
   const req=url instanceof Request?url:new Request(url,init);token=req.headers.get("Authorization")??"";
   if(req.method==="GET")return new Response("",{status:405});
   if(req.method==="DELETE")return new Response("",{status:200});
   const rpc=JSON.parse(await req.text()||"{}");if(rpc.id===undefined)return new Response(null,{status:202});calls.push(rpc.method);
-  const result=rpc.method==="initialize"?{protocolVersion:"2025-03-26",capabilities:{tools:{}},serverInfo:{name:"fixture",version:"1"}}:rpc.method==="tools/list"?{tools:[{name:"safe",description:"Fixture",inputSchema:{type:"object",properties:{}}},{name:"secret",inputSchema:{type:"object"}}]}:{content:[{type:"text",text:"remote result"}]};
+  const result=rpc.method==="initialize"?{protocolVersion:"2025-03-26",capabilities:{tools:{}},serverInfo:{name:"fixture",version:"1"}}:rpc.method==="tools/list"?{tools:[{name:"safe",description:"Fixture",inputSchema:{type:"object",properties:{}}},{name:"secret",inputSchema:{type:"object"}}]}:output;
   return new Response(JSON.stringify({jsonrpc:"2.0",id:rpc.id,result}),{headers:{"content-type":"application/json"}});
  });
  writeFileSync(join(dir,"mcp.json"),JSON.stringify({mcpServers:{remote:{url:"https://fixture.example/mcp",headers:{Authorization:"Bearer host-fixture-token"},toolExposure:{secret:"hidden"}},local:{command:"touch",args:[join(dir,"must-not-exist")]},disabled:{url:"https://fixture.example/mcp",enabled:false}}}));
  try{
   const signal=new AbortController().signal;
-  const list=await callWorkbenchPlugin(dir,"remote",undefined,{},signal);expect(list).toContain("safe");expect(list).not.toContain("secret");expect(list).not.toContain("host-fixture-token");
-  expect(await callWorkbenchPlugin(dir,"remote","safe",{},signal)).toBe("remote result");expect(token).toBe("Bearer host-fixture-token");expect(calls.filter(c=>c==="tools/call")).toHaveLength(1);
+  const list=await callWorkbenchPlugin(dir,"remote",undefined,{},signal);expect(JSON.stringify(list)).toContain("safe");expect(JSON.stringify(list)).not.toContain("secret");expect(JSON.stringify(list)).not.toContain("host-fixture-token");
+  expect(await callWorkbenchPlugin(dir,"remote","safe",{},signal)).toMatchObject({content:[{type:"text",text:"remote result"}]});expect(token).toBe("Bearer host-fixture-token");expect(calls.filter(c=>c==="tools/call")).toHaveLength(1);
   await expect(callWorkbenchPlugin(dir,"remote","secret",{},signal)).rejects.toThrow();expect(calls.filter(c=>c==="tools/call")).toHaveLength(1);
+  output={content:[{type:"image",data:"aW1hZ2U=",mimeType:"image/png"}],structuredContent:{count:2}};
+  const image=await callWorkbenchPlugin(dir,"remote","safe",{},signal);
+  expect(image.content).toContainEqual({type:"image",data:"aW1hZ2U=",mimeType:"image/png"});
+  expect(image.content).toContainEqual({type:'text',text:'{"count":2}'});
+  output={content:[{type:"resource",resource:{uri:"fixture://report",mimeType:"text/plain",text:"embedded report"}}]};
+  expect(JSON.stringify(await callWorkbenchPlugin(dir,"remote","safe",{},signal))).toContain("embedded report");
+  output={content:[{type:"audio",data:"aW1hZ2U=",mimeType:"audio/wav"}]};
+  expect(JSON.stringify(await callWorkbenchPlugin(dir,"remote","safe",{},signal))).toContain("暂不支持");
   await expect(callWorkbenchPlugin(dir,"local",undefined,{},signal)).rejects.toThrow("HTTPS");await expect(callWorkbenchPlugin(dir,"disabled",undefined,{},signal)).rejects.toThrow("HTTPS");
  }finally{vi.unstubAllGlobals();rmSync(dir,{recursive:true,force:true});}
 });

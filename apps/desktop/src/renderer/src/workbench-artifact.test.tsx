@@ -36,3 +36,27 @@ it('renders Markdown as a document automatically and keeps the raw comparison av
  render(<WorkbenchReview w={w} p={p} disabled={false} action={action}/>);
  expect(await screen.findByRole('heading',{name:'产品方案'})).toBeTruthy();expect(screen.getByText('查看源码与变更对比')).toBeTruthy();
 });
+
+it('loads results even while the shared mutation action is busy',async()=>{
+ vi.mocked(invoke).mockImplementation(async(name)=>name==='workbench:review'?{token:'r',total:1,conflicts:0,files:[{path:'PRD.md',kind:'added'}]} as never:{path:'PRD.md',before:{bytes:0,text:'',binary:false},after:{bytes:20,text:'# Ready',binary:false}} as never);
+ const busyAction=vi.fn(async()=>{});
+ const view=render(<WorkbenchReview w={w} p={p} disabled={true} action={busyAction}/>);
+ view.rerender(<WorkbenchReview w={w} p={p} disabled={false} action={busyAction}/>);
+ expect(await screen.findByRole('heading',{name:'Ready'})).toBeTruthy();
+ expect(busyAction).not.toHaveBeenCalled();
+});
+
+it('shows result read errors and ignores a response after switching roles',async()=>{
+ let resolveOld!:(value:unknown)=>void;
+ vi.mocked(invoke).mockImplementation(async(name,input)=>{
+  if(name==='workbench:review' && (input as {roleId:string}).roleId==='front')return await new Promise<unknown>(r=>resolveOld=r) as never;
+  throw Error('result no longer available');
+ });
+ const view=render(<WorkbenchReview w={w} p={p} disabled={false} action={action}/>);
+ view.rerender(<WorkbenchReview w={w} p={{...p,roleId:'other',taskId:'other'}} disabled={false} action={action}/>);
+ expect((await screen.findByRole('alert')).textContent).toContain('result no longer available');
+ resolveOld({token:'old',total:1,conflicts:0,files:[{path:'old-secret.md',kind:'added'}]});
+ await new Promise(r=>setTimeout(r,0));
+ expect(screen.queryByText('old-secret.md')).toBeNull();
+ expect(invoke).not.toHaveBeenCalledWith('workbench:reviewFile',expect.objectContaining({token:'old'}));
+});

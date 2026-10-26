@@ -571,7 +571,7 @@ function CollaborationTask() {
     async function load() {
       try {
         const [records, usage] = await Promise.all([
-          Promise.all(ids.map((taskId) => invoke("task:get", { taskId }))),
+          Promise.all(ids.map((taskId) => invoke("task:get", { taskId, includeTranscript:false }))),
           Promise.all(
             ids.map((taskId) => invoke("task:getRoleContexts", { taskId })),
           ),

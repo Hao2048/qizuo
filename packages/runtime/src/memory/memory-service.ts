@@ -436,23 +436,25 @@ export class MemoryService {
     const picked: MemoryInfo[] = [];
     for (const scope of input.scopes) {
       if (scope.scopeType !== "role") continue;
-      const rows = this.#db
-        .prepare(
-          `SELECT * FROM memories WHERE scope_type='role' AND scope_id=? AND status='active'
+      // Rank all eligible memories while retaining only the requested top results.
+      // A recency cutoff before ranking silently hides older relevant knowledge.
+      const rows = this.#db.prepare(
+        `SELECT * FROM memories WHERE scope_type='role' AND scope_id=? AND status='active'
     AND COALESCE(json_extract(quality,'$.verification'),'legacy')!='pending'
-    AND (json_extract(quality,'$.projectId') IS NULL OR json_extract(quality,'$.projectId')=?) ORDER BY updated_at DESC,id DESC LIMIT 100`,
-        )
-        .all(scope.scopeId, input.projectId ?? null) as MemoryRow[];
+    AND (json_extract(quality,'$.projectId') IS NULL OR json_extract(quality,'$.projectId')=?) ORDER BY updated_at DESC,id DESC`,
+      ).iterate(scope.scopeId, input.projectId ?? null) as Iterable<MemoryRow>;
       const q = input.query?.trim().toLowerCase();
-      picked.push(
-        ...rows
-          .map((r) => this.#toInfo(r))
-          .map((m) => ({ m, score: q ? this.#score(m, q) : 1 }))
-          .filter((s) => s.score > 0)
-          .sort((a, b) => b.score - a.score || b.m.updatedAt - a.m.updatedAt)
-          .slice(0, input.perScopeLimit ?? 4)
-          .map((s) => s.m),
-      );
+      const limit = Math.max(0, Math.min(input.perScopeLimit ?? 4, input.totalLimit ?? 10));
+      const best: {m:MemoryInfo;score:number}[] = [];
+      for (const row of rows) {
+        const m = this.#toInfo(row), score = q ? this.#score(m,q) : 1;
+        if(score <= 0 || limit === 0) continue;
+        best.push({m,score});
+        best.sort((a,b)=>b.score-a.score || b.m.updatedAt-a.m.updatedAt);
+        if(best.length > limit) best.pop();
+        if(!q && best.length === limit) break;
+      }
+      picked.push(...best.map(item=>item.m));
     }
     let remaining = Math.max(0, Math.min(input.maxChars ?? 12000, 24000));
     const seen = new Set<string>();

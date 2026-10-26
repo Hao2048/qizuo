@@ -488,7 +488,7 @@ function registerCoreCommands(
   );
   reg("task:create", (input) => core.tasks.createTask(input));
   reg("task:list", async () => ({ tasks: await core.tasks.listTasks() }));
-  reg("task:get", async (input) => core.tasks.getTask(input.taskId));
+  reg("task:get", async (input) => core.tasks.getTask(input.taskId, input.includeTranscript));
   reg("task:prompt", async (input) => {
     const result = await core.tasks.promptTask(input);
     if (result.accepted && input.draftRevision !== undefined) core.drafts.acknowledge({kind:"chat",id:input.taskId}, input.draftRevision);

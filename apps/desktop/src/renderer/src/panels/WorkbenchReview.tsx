@@ -29,6 +29,7 @@ export function WorkbenchReview({
   const [image, setImage] = useState<{ data: string; mimeType: string } | null>(
     null,
   );
+  const [loadError,setLoadError] = useState<string | null>(null);
   const generation = useRef(0), fileRequest = useRef(0);
   const available=!!p.taskId && ["done", "awaiting_review", "applied"].includes(p.status);
   useEffect(() => {
@@ -55,16 +56,18 @@ export function WorkbenchReview({
   if (!available)
     return null;
   const load = (page = 0) =>
-    void action(async () => {
+    void (async () => {
       const version = generation.current;
-      fileRequest.current++;
+      const loadRequest=++fileRequest.current;
+      setLoadError(null);
+      try {
       const result = await invoke("workbench:review", {
         id: w.id,
         roleId: p.roleId,
         offset: page,
         limit: 100,
       });
-      if (version !== generation.current) return;
+      if (version !== generation.current || loadRequest !== fileRequest.current) return;
       setImage(null);
       setReview(result);
       setOffset(page);
@@ -72,10 +75,14 @@ export function WorkbenchReview({
       setAck(false);
       const candidates=result.files.filter(f=>f.kind!=="deleted");
       const primary=candidates.find(f=>/(^|\/)(dist|build|delivery)\/.*index\.html?$/i.test(f.path))??candidates.find(f=>/(^|\/)index\.html?$/i.test(f.path))??candidates.find(f=>/\.(mp4|webm|pdf|docx|md|xlsx|svg|png)$/i.test(f.path))??candidates[0];
-      if(primary){const request=++fileRequest.current;const next=await invoke("workbench:reviewFile",{id:w.id,roleId:p.roleId,token:result.token,path:primary.path});if(version===generation.current&&request===fileRequest.current)setFile(next);}
-    });
+      if(primary){const request=loadRequest;const next=await invoke("workbench:reviewFile",{id:w.id,roleId:p.roleId,token:result.token,path:primary.path});if(version===generation.current&&request===fileRequest.current)setFile(next);}
+      } catch(error) {
+        if(version===generation.current && loadRequest===fileRequest.current)setLoadError(error instanceof Error?error.message:String(error));
+      }
+    })();
   return (
     <div className="wb-review">
+      {loadError && <p role="alert">{loadError}</p>}
       <button className="ghost" disabled={disabled} onClick={() => load()}>
         刷新成果文件
       </button>
